@@ -472,9 +472,12 @@ void onNewDepthSample(DepthNode node, DepthNode::NewSampleReceivedData data)
     }
 
     // Convert softkinetic vertices into a kinect-like coordinates pointcloud
-    current_cloud->points[count].x =   data.verticesFloatingPoint[count].z;
+    /*current_cloud->points[count].x =   data.verticesFloatingPoint[count].z;
     current_cloud->points[count].y = - data.verticesFloatingPoint[count].x;
-    current_cloud->points[count].z =   data.verticesFloatingPoint[count].y;
+    current_cloud->points[count].z =   data.verticesFloatingPoint[count].y;*/
+    current_cloud->points[count].x =  data.verticesFloatingPoint[count].x;
+    current_cloud->points[count].y =  -data.verticesFloatingPoint[count].y;
+    current_cloud->points[count].z =  data.verticesFloatingPoint[count].z;
 
     // Get mapping between depth map and color map, assuming we have a RGB image
     if (img_rgb.data.size() == 0)
@@ -504,10 +507,10 @@ void onNewDepthSample(DepthNode node, DepthNode::NewSampleReceivedData data)
   }
 
   // Check for usage of passthrough filtering
-  if (use_passthrough_filter)
+  /*if (use_passthrough_filter)
   {
     filterPassThrough(current_cloud);
-  }
+  }*/
 
   // Check for usage of frustum culling filtering
   if (use_frustum_culling_filter)
