@@ -316,6 +316,7 @@ void filterCloudRadiusBased(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_to_filt
                 << "points reduced from " << before << " to " << after);
 }
 
+//check it, because it breaks width x height and makes the cloud unordered
 void filterPassThrough(pcl::PointCloud<pcl::PointXYZRGB>::Ptr cloud_to_filter)
 {
   // Passthrough filter:
@@ -387,7 +388,7 @@ void setupCameraInfo(const DepthSense::IntrinsicParameters& params, sensor_msgs:
   //     [fx  0 cx]
   // K = [ 0 fy cy]
   //     [ 0  0  1]
-  cam_info.K[0] = params.fx;
+  cam_info.K[0] = params.fx; //307.32; //
   cam_info.K[2] = params.cx;
   cam_info.K[4] = params.fy;
   cam_info.K[5] = params.cy;
@@ -406,11 +407,98 @@ void setupCameraInfo(const DepthSense::IntrinsicParameters& params, sensor_msgs:
   //     [fx'  0  cx' Tx]
   // P = [ 0  fy' cy' Ty]
   //     [ 0   0   1   0]
-  cam_info.P[0] = params.fx;
+  cam_info.P[0] = params.fx; //307.32; //260; //
   cam_info.P[2] = params.cx;
   cam_info.P[5] = params.fy;
   cam_info.P[6] = params.cy;
   cam_info.P[10] = 1.0;
+}
+
+float compute_hist(sensor_msgs::Image &img, const std::vector<float> &mean_val, const int i_min, const int i_max, const int j_min, const int j_max, bool visualize=false)
+{
+  std::vector<int> mean_hist(mean_val.size()-1, 0);
+
+  for(int k=0; k<mean_val.size()-1; ++k)
+    for(int i=i_min; i<i_max; ++i)
+      for(int j=j_min; j<j_max; ++j)
+      {
+        float tmp = *reinterpret_cast<float*>(&img.data[(j*img.width+i)*sizeof(float)]);
+          if ((tmp >= mean_val[k]) && (tmp < mean_val[k+1]))
+            ++mean_hist[k];
+      }
+
+  if (visualize)
+  {
+    std::cout << "- - - - - - - - - - ";
+    for (std::vector<int>::iterator it=mean_hist.begin(); it!=mean_hist.end(); ++it)
+      std::cout << *it << " ";
+    std::cout << std::endl;
+  }
+
+  int max_count = mean_hist[0];
+  int max_id = 0;
+  for (int i=0; i<=mean_hist.size(); ++i)
+    if (max_count < mean_hist[i])
+    {
+      max_id = i;
+      max_count = mean_hist[i];
+    }
+
+  float mean_temp = 0.0f;
+  for(int i=i_min; i<i_max; i++)
+    for(int j=j_min; j<j_max; j++)
+    {
+      float tmp = *reinterpret_cast<float*>(&img.data[(j*img.width+i)*sizeof(float)]);
+        if (tmp >= mean_val[max_id])
+          mean_temp += tmp;
+    }
+
+  //std::cout << " - " << max_count << " " << max_id << " " << mean_temp << " " << mean_temp/ static_cast<float>(max_count);
+
+  if (max_count > 0)
+    return mean_temp /= static_cast<float>(max_count);
+  else
+    return 0.0f;
+}
+
+void testCorners(sensor_msgs::Image &img, const float max)
+{
+  std::vector<float> mean_val;
+  mean_val.push_back(0.12f);
+  mean_val.push_back(max /4.0f);
+  mean_val.push_back(max /2.0f);
+  mean_val.push_back(max /5.0f*3.0f);
+  mean_val.push_back(max);
+  /*std::cout << "Histogram bins: ";
+  for (std::vector<float>::iterator it=mean_val.begin(); it!=mean_val.end(); ++it)
+    std::cout << *it << " ";
+  std::cout << std::endl;*/
+
+  std::vector<float> mean_corners(mean_val.size()-1, 0.0);
+
+  //compute the histogram for the corners
+  mean_corners[0] = compute_hist(img, mean_val, 0, img_depth.width/3, img_depth.height/3*2, img_depth.height);
+  mean_corners[1] = compute_hist(img, mean_val, img_depth.width/3*2, img_depth.width, img_depth.height/3*2, img_depth.height);
+  mean_corners[2] = compute_hist(img, mean_val, 0, img_depth.width/3, 0, img_depth.height/3);
+  mean_corners[3] = compute_hist(img, mean_val, img_depth.width/3*2, img_depth.width, 0, img_depth.height/3);
+
+  for (std::vector<float>::iterator it=mean_corners.begin(); it!=mean_corners.end(); ++it)
+    std::cout << *it << " ";
+  std::cout << std::endl;
+
+  //compute the histogram for the whole image
+  std::vector<float> test_val;
+  test_val.resize(51);
+  for (int i=0; i<test_val.size();++i)
+    test_val[i] = 1.0f * static_cast<float>(i)/test_val.size();
+  test_val[0] = 0.12f;
+  /*std::cout << "Histogram bins: ";
+  for (std::vector<float>::iterator it=test_val.begin(); it!=test_val.end(); ++it)
+    std::cout << *it << " ";
+  std::cout << std::endl;*/
+
+  //compute the histogram for the whole image
+  compute_hist(img, test_val, 0, img_depth.width, 0, img_depth.height, true);
 }
 
 // New depth sample event
@@ -440,23 +528,34 @@ void onNewDepthSample(DepthNode node, DepthNode::NewSampleReceivedData data)
       // User didn't provide a calibration file for the depth camera, so
       // fill camera info with the parameters provided by the camera itself
       setupCameraInfo(data.stereoCameraParameters.depthIntrinsics, depth_info);
+      /*depth_info.K[0] = 252.12;
+      depth_info.P[0] = depth_info.K[0];
+      depth_info.K[4] = 252.72;
+      depth_info.P[5] = depth_info.K[4];*/
     }
   }
 
   int32_t w = img_depth.width;
   int32_t h = img_depth.height;
 
+  //pcl::PCLPointCloud2* cloud_data = new pcl::PCLPointCloud2;
+  //pcl::PCLPointCloud2ConstPtr current_cloud(cloud_data);
   pcl::PointCloud<pcl::PointXYZRGB>::Ptr current_cloud(new pcl::PointCloud<pcl::PointXYZRGB>());
   current_cloud->header.frame_id = cloud.header.frame_id;
   current_cloud->width  = w;
   current_cloud->height = h;
   current_cloud->is_dense = true;
   current_cloud->points.resize(w * h);
-
   ++g_dFrames;
 
   // Dump depth map on image message, though we must do some post-processing for saturated pixels
   std::memcpy(img_depth.data.data(), data.depthMapFloatingPoint, img_depth.data.size());
+
+  //initialize basic statistics: mean, min, max
+  /*int nbr = 0;
+  float mean = 0.0f;
+  float min = std::numeric_limits<float>::max();
+  float max = 0.0f;*/
 
   for (int count = 0; count < w * h; count++)
   {
@@ -470,6 +569,18 @@ void onNewDepthSample(DepthNode node, DepthNode::NewSampleReceivedData data)
       // we keep them in the pointcloud so the downsampling filter can be applied
       continue;
     }
+
+    /*//update basic statistics: mean, min, max
+    float tmp = *reinterpret_cast<float*>(&img_depth.data[count*sizeof(float)]);
+    if (tmp > 0.0f)
+    {
+      mean += tmp;
+      if (tmp > max)
+        max = tmp;
+      if (tmp < min)
+        min = tmp;
+      ++nbr;
+    }*/
 
     // Convert softkinetic vertices into a kinect-like coordinates pointcloud
     /*current_cloud->points[count].x =   data.verticesFloatingPoint[count].z;
@@ -498,13 +609,26 @@ void onNewDepthSample(DepthNode node, DepthNode::NewSampleReceivedData data)
     }
   }
 
+  //finalize basic statistics: mean, min, max
+  /*testCorners(img_depth, max);
+  mean /= (float)nbr;
+  float var = 0.0f;
+  for (int count = 0; count < w * h; count++)
+  {
+    float tmp = *reinterpret_cast<float*>(&img_depth.data[count*sizeof(float)]);
+    if (tmp > 0.0f)
+      var += (tmp-mean) * (tmp-mean);
+  }
+  var /= (float)nbr;
+  std::cout << "- - - - - " << img_depth.header.stamp << " " << mean << " " << var << " " << nbr << " " << min << " " << max << std::endl;*/
+
   // Check for usage of voxel grid filtering to downsample point cloud
   // XXX This must be the first filter to be called, as it requires the "squared" point cloud
   // we create (with proper values for width and height) that any other filter would destroy
-  if (use_voxel_grid_filter)
+  /*if (use_voxel_grid_filter)
   {
     downsampleCloud(current_cloud);
-  }
+  }*/
 
   // Check for usage of passthrough filtering
   /*if (use_passthrough_filter)
@@ -530,14 +654,18 @@ void onNewDepthSample(DepthNode node, DepthNode::NewSampleReceivedData data)
   }
 
   // Convert current_cloud to PointCloud2 and publish
-  pcl::toROSMsg(*current_cloud, cloud);
+  //pcl::toROSMsg(*current_cloud, cloud);
 
   img_depth.header.stamp = ros::Time::now();
   depth_info.header      = img_depth.header;
 
-  pub_cloud.publish(cloud);
+  pub_cloud.publish(*current_cloud); //cloud);
   pub_depth.publish(img_depth);
   pub_depth_info.publish(depth_info);
+
+  /*cv_bridge::CvImagePtr cv_ptr;
+  cv_ptr = cv_bridge::toCvCopy(cloud_image, sensor_msgs::image_encodings::TYPE_32FC1);
+  cv_ptr->image = depth_img.clone();*/
 }
 
 /*----------------------------------------------------------------------------*/
@@ -837,9 +965,6 @@ int main(int argc, char* argv[])
     ros_node_shutdown = true;
   }
 
-  nh.param<std::string>("camera_link", softkinetic_link, "softkinetic_link");
-  cloud.header.frame_id = softkinetic_link;
-
   // Fill in the color and depth images message header frame id
   std::string optical_frame;
   if (nh.getParam("rgb_optical_frame", optical_frame))
@@ -861,6 +986,9 @@ int main(int argc, char* argv[])
   {
     img_depth.header.frame_id = "/softkinetic_depth_optical_frame";
   }
+
+  nh.param<std::string>("camera_link", softkinetic_link, "softkinetic_link");
+  cloud.header.frame_id = img_depth.header.frame_id;
 
   // Get confidence threshold from parameter server
   if (!nh.hasParam("confidence_threshold"))
@@ -975,8 +1103,9 @@ int main(int argc, char* argv[])
   image_transport::ImageTransport it(nh);
 
   // Initialize publishers
-  pub_cloud = nh.advertise<sensor_msgs::PointCloud2>("depth/points", 1);
-  pub_rgb = it.advertise("rgb/image_color", 1);
+  //pub_cloud = nh.advertise<sensor_msgs::PointCloud2>("points", 1);
+  pub_cloud = nh.advertise<pcl::PointCloud<pcl::PointXYZRGB> >("/camera/depth_registered/points", 1);
+  pub_rgb = it.advertise("rgb/image_raw", 1);
   pub_mono = it.advertise("rgb/image_mono", 1);
   pub_depth = it.advertise("depth/image_raw", 1);
   pub_depth_info = nh.advertise<sensor_msgs::CameraInfo>("depth/camera_info", 1);
